@@ -133,10 +133,12 @@ async def root():
 
 @app.post("/register")
 async def register(username: str, email: str, password: str):
+    print(f"DEBUG password length: {len(password)}, password: {password!r}")
+    if len(password) > 72:
+        raise HTTPException(status_code=400, detail="Password cannot be longer than 72 characters.")
     existing = await db.users.find_one({"username": username})
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
-    
     user = {
         "username": username,
         "email": email,
