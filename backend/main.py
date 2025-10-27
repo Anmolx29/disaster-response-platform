@@ -12,6 +12,13 @@ import jwt
 from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+from ai_engine.disaster_prediction import DisasterPredictor
+from ai_engine.resource_optimizer import ResourceOptimizer
+from services.alert_service import AlertService
+import numpy as np
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this")
@@ -42,6 +49,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # Database
 client = AsyncIOMotorClient(MONGODB_URL)
 db = client.disaster_management
+# Initialize AI and Alert instances (ADD THESE 3 LINES)
+predictor = DisasterPredictor()
+optimizer = ResourceOptimizer()
+alerter = AlertService()
+
 
 # Data Models
 class User(BaseModel):
@@ -207,6 +219,66 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow()}
+
+from fastapi import Body
+# 1. Unified prediction endpoint
+@app.post("/predict/{disaster_type}")
+async def predict_disaster(disaster_type: str, payload: dict = Body(...)):
+    disaster_type = disaster_type.lower()
+    if disaster_type == "flood":
+        result = predictor.predict_flood_risk(
+            payload["rainfall"],
+            payload["river_level"],
+            payload["soil_moisture"],
+            payload["temperature"],
+            payload["humidity"]
+        )
+    elif disaster_type == "earthquake":
+        result = predictor.predict_earthquake_risk(
+            payload["magnitude"],
+            payload["depth"],
+            payload["distance_from_fault"],
+            payload["peak_ground_accel"]
+        )
+    elif disaster_type == "cloudburst":
+        result = predictor.predict_cloudburst_risk(
+            payload["rainfall_rate"],
+            payload["duration"],
+            payload["cloud_water_content"],
+            payload["temp_diff"]
+        )
+    elif disaster_type == "avalanche":
+        result = predictor.predict_avalanche_risk(
+            payload["snow_depth"],
+            payload["slope_angle"],
+            payload["temperature"],
+            payload["wind_speed"]
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Unknown disaster type")
+    return result
+
+@app.post("/optimize/resources")
+async def optimize_resources(payload: dict = Body(...)):
+    resource_coords = np.array(payload["resource_coords"])
+    incident_coords = np.array(payload["incident_coords"])
+    assignments, costs = optimizer.assign_resources(resource_coords, incident_coords)
+    return {"assignments": assignments, "costs": costs.tolist()}
+
+@app.post("/alerts/sms")
+async def send_sms_api(payload: dict = Body(...)):
+    message = payload.get("message", "")
+    to = payload.get("to", "")
+    ok = alerter.send_sms(message, to)
+    return {"success": ok}
+
+@app.post("/alerts/email")
+async def send_email_api(payload: dict = Body(...)):
+    subject = payload.get("subject", "")
+    message = payload.get("message", "")
+    to = payload.get("to", "")
+    ok = alerter.send_email(subject, message, to)
+    return {"success": ok}
 
 if __name__ == "__main__":
     import uvicorn
