@@ -1,25 +1,17 @@
 import React from 'react';
-import './App.css';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Dashboard from './pages/Dashboard';
+import Login from './pages/Login';
 
+// No token gating! Public can see dashboard; login is optional for admin features
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <h1>🚨 Disaster Response Platform</h1>
-        <p>AI-Powered Emergency Management System</p>
-        <div style={{ marginTop: '2rem' }}>
-          <button style={{ margin: '0.5rem', padding: '1rem 2rem', fontSize: '1rem' }}>
-            View Incidents
-          </button>
-          <button style={{ margin: '0.5rem', padding: '1rem 2rem', fontSize: '1rem' }}>
-            AI Predictions
-          </button>
-          <button style={{ margin: '0.5rem', padding: '1rem 2rem', fontSize: '1rem' }}>
-            Send Alerts
-          </button>
-        </div>
-      </header>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={<Dashboard />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 

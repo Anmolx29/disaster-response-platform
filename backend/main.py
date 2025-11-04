@@ -18,7 +18,9 @@ from services.alert_service import AlertService
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
-
+from bson import ObjectId
+import asyncio
+import subprocess
 
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this")
@@ -49,18 +51,16 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # Database
 client = AsyncIOMotorClient(MONGODB_URL)
 db = client.disaster_management
-# Initialize AI and Alert instances (ADD THESE 3 LINES)
 predictor = DisasterPredictor()
 optimizer = ResourceOptimizer()
 alerter = AlertService()
-
 
 # Data Models
 class User(BaseModel):
     username: str
     email: str
     role: str = "user"
-    
+
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -117,6 +117,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     except:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+def fix_mongo_ids(doc):
+    if "_id" in doc:
+        doc["_id"] = str(doc["_id"])
+    return doc
+
 # WebSocket Manager
 class ConnectionManager:
     def __init__(self):
@@ -145,7 +150,6 @@ async def root():
 
 @app.post("/register")
 async def register(username: str, email: str, password: str):
-    print(f"DEBUG password length: {len(password)}, password: {password!r}")
     if len(password) > 72:
         raise HTTPException(status_code=400, detail="Password cannot be longer than 72 characters.")
     existing = await db.users.find_one({"username": username})
@@ -166,7 +170,6 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = await db.users.find_one({"username": form_data.username})
     if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
-    
     access_token = create_access_token(data={"sub": user["username"]})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -178,10 +181,11 @@ async def create_incident(incident: Incident, current_user: str = Depends(get_cu
     await manager.broadcast({"type": "new_incident", "data": incident.dict()})
     return incident
 
+# —— PUBLIC (no login needed) ——
 @app.get("/incidents")
-async def get_incidents(current_user: str = Depends(get_current_user)):
+async def get_incidents():
     incidents = await db.incidents.find().to_list(100)
-    return incidents
+    return [fix_mongo_ids(doc) for doc in incidents]
 
 @app.post("/resources")
 async def create_resource(resource: Resource, current_user: str = Depends(get_current_user)):
@@ -189,10 +193,11 @@ async def create_resource(resource: Resource, current_user: str = Depends(get_cu
     resource.id = str(result.inserted_id)
     return resource
 
+# —— PUBLIC (no login needed) ——
 @app.get("/resources")
-async def get_resources(current_user: str = Depends(get_current_user)):
+async def get_resources():
     resources = await db.resources.find().to_list(100)
-    return resources
+    return [fix_mongo_ids(doc) for doc in resources]
 
 @app.post("/alerts")
 async def create_alert(alert: Alert, current_user: str = Depends(get_current_user)):
@@ -204,7 +209,7 @@ async def create_alert(alert: Alert, current_user: str = Depends(get_current_use
 @app.get("/alerts")
 async def get_alerts():
     alerts = await db.alerts.find().sort("created_at", -1).to_list(50)
-    return alerts
+    return [fix_mongo_ids(doc) for doc in alerts]
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -221,38 +226,27 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow()}
 
 from fastapi import Body
-# 1. Unified prediction endpoint
 @app.post("/predict/{disaster_type}")
 async def predict_disaster(disaster_type: str, payload: dict = Body(...)):
     disaster_type = disaster_type.lower()
     if disaster_type == "flood":
         result = predictor.predict_flood_risk(
-            payload["rainfall"],
-            payload["river_level"],
-            payload["soil_moisture"],
-            payload["temperature"],
-            payload["humidity"]
+            payload["rainfall"], payload["river_level"], payload["soil_moisture"],
+            payload["temperature"], payload["humidity"]
         )
     elif disaster_type == "earthquake":
         result = predictor.predict_earthquake_risk(
-            payload["magnitude"],
-            payload["depth"],
-            payload["distance_from_fault"],
-            payload["peak_ground_accel"]
+            payload["magnitude"], payload["depth"], payload["distance_from_fault"], payload["peak_ground_accel"]
         )
     elif disaster_type == "cloudburst":
         result = predictor.predict_cloudburst_risk(
-            payload["rainfall_rate"],
-            payload["duration"],
-            payload["cloud_water_content"],
-            payload["temp_diff"]
+            payload["rainfall_rate"], payload["duration"],
+            payload["cloud_water_content"], payload["temp_diff"]
         )
     elif disaster_type == "avalanche":
         result = predictor.predict_avalanche_risk(
-            payload["snow_depth"],
-            payload["slope_angle"],
-            payload["temperature"],
-            payload["wind_speed"]
+            payload["snow_depth"], payload["slope_angle"],
+            payload["temperature"], payload["wind_speed"]
         )
     else:
         raise HTTPException(status_code=400, detail="Unknown disaster type")
@@ -279,6 +273,28 @@ async def send_email_api(payload: dict = Body(...)):
     to = payload.get("to", "")
     ok = alerter.send_email(subject, message, to)
     return {"success": ok}
+
+@app.on_event("startup")
+async def run_fetch_script_periodically():
+    async def fetch_loop():
+        while True:
+            try:
+                subprocess.run(["python", "fetch_earthquake.py"])
+            except Exception as e:
+                print("fetch_earthquake.py error:", e)
+            await asyncio.sleep(1800)  # every 30 minutes
+    asyncio.create_task(fetch_loop())
+
+@app.on_event("startup")
+async def run_fetch_flood_periodically():
+    async def fetch_loop():
+        while True:
+            try:
+                subprocess.run(["python", "fetch_flood.py"])
+            except Exception as e:
+                print("fetch_flood.py error:", e)
+            await asyncio.sleep(1800)
+    asyncio.create_task(fetch_loop())
 
 if __name__ == "__main__":
     import uvicorn
